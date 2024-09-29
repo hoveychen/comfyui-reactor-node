@@ -1,8 +1,12 @@
-import os, glob
+import glob
+import os
 
+import comfy.model_management as model_management
+import folder_paths
 from PIL import Image
 
 import modules.scripts as scripts
+
 # from modules.upscaler import Upscaler, UpscalerData
 from modules import scripts, scripts_postprocessing
 from modules.processing import (
@@ -12,19 +16,17 @@ from modules.processing import (
 from modules.shared import state
 from scripts.reactor_logger import logger
 from scripts.reactor_swapper import (
+    analyze_faces,
+    get_current_faces_model,
+    half_det_size,
+    providers,
     swap_face,
     swap_face_many,
-    get_current_faces_model,
-    analyze_faces,
-    half_det_size,
-    providers
 )
-import folder_paths
-import comfy.model_management as model_management
 
 
 def get_models():
-    models_path = os.path.join(folder_paths.models_dir,"insightface/*")
+    models_path = os.path.join(folder_paths.models_dir, "insightface/*")
     models = glob.glob(models_path)
     models = [x for x in models if x.endswith(".onnx") or x.endswith(".pth")]
     return models
@@ -36,6 +38,8 @@ class FaceSwapScript(scripts.Script):
         self,
         p: StableDiffusionProcessing,
         img,
+        lookup,
+        lookup_threshold,
         enable,
         source_faces_index,
         faces_index,
@@ -54,8 +58,9 @@ class FaceSwapScript(scripts.Script):
     ):
         self.enable = enable
         if self.enable:
-
-            self.source = img    
+            self.source = img
+            self.lookup = lookup
+            self.lookup_threshold = lookup_threshold
             self.swap_in_generated = swap_in_generated
             self.gender_source = gender_source
             self.gender_target = gender_target
@@ -68,7 +73,9 @@ class FaceSwapScript(scripts.Script):
             self.codeformer_weight = codeformer_weight
             self.interpolation = interpolation
             self.source_faces_index = [
-                int(x) for x in source_faces_index.strip(",").split(",") if x.isnumeric()
+                int(x)
+                for x in source_faces_index.strip(",").split(",")
+                if x.isnumeric()
             ]
             self.faces_index = [
                 int(x) for x in faces_index.strip(",").split(",") if x.isnumeric()
@@ -77,30 +84,36 @@ class FaceSwapScript(scripts.Script):
                 self.source_faces_index = [0]
             if len(self.faces_index) == 0:
                 self.faces_index = [0]
-            
+
             if self.gender_source is None or self.gender_source == "no":
                 self.gender_source = 0
-            elif self.gender_source  == "female":
+            elif self.gender_source == "female":
                 self.gender_source = 1
-            elif self.gender_source  == "male":
+            elif self.gender_source == "male":
                 self.gender_source = 2
-            
+
             if self.gender_target is None or self.gender_target == "no":
                 self.gender_target = 0
-            elif self.gender_target  == "female":
+            elif self.gender_target == "female":
                 self.gender_target = 1
-            elif self.gender_target  == "male":
+            elif self.gender_target == "male":
                 self.gender_target = 2
 
             # if self.source is not None:
             if isinstance(p, StableDiffusionProcessingImg2Img) and swap_in_source:
-                logger.status(f"Working: source face index %s, target face index %s", self.source_faces_index, self.faces_index)
+                logger.status(
+                    f"Working: source face index %s, target face index %s",
+                    self.source_faces_index,
+                    self.faces_index,
+                )
 
                 if len(p.init_images) == 1:
 
                     result = swap_face(
                         self.source,
                         p.init_images[0],
+                        lookup_img=self.lookup,
+                        lookup_threshold=self.lookup_threshold,
                         source_faces_index=self.source_faces_index,
                         faces_index=self.faces_index,
                         model=self.model,
@@ -138,6 +151,8 @@ class FaceSwapScript(scripts.Script):
                     result = swap_face_many(
                         self.source,
                         p.init_images,
+                        lookup_img=self.lookup,
+                        lookup_threshold=self.lookup_threshold,
                         source_faces_index=self.source_faces_index,
                         faces_index=self.faces_index,
                         model=self.model,
@@ -164,7 +179,11 @@ class FaceSwapScript(scripts.Script):
     def postprocess_image(self, p, script_pp: scripts.PostprocessImageArgs, *args):
         if self.enable and self.swap_in_generated:
             if self.source is not None:
-                logger.status(f"Working: source face index %s, target face index %s", self.source_faces_index, self.faces_index)
+                logger.status(
+                    f"Working: source face index %s, target face index %s",
+                    self.source_faces_index,
+                    self.faces_index,
+                )
                 image: Image.Image = script_pp.image
                 result = swap_face(
                     self.source,
